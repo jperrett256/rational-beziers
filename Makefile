@@ -1,0 +1,23 @@
+SDL2_INC_DIR = C:/MinGW_dev_lib/include/SDL2
+SDL2_LIB_DIR = C:/MinGW_dev_lib/lib
+
+CXX = gcc
+
+INCLUDE_PATHS = -I$(SDL2_INC_DIR)
+
+LIBRARY_PATHS = -L$(SDL2_LIB_DIR)
+
+COMPILER_FLAGS = -Wall
+RELEASE_COMPILER_FLAGS = -mwindows
+
+# TODO what is lmingw32 doing here?
+LINKER_FLAGS = -lmingw32 -lSDL2main -lSDL2
+
+OBJS = bezier.c
+OBJ_NAME = output
+
+all: $(OBJS)
+	$(CXX) $(OBJS) $(INCLUDE_PATHS) $(LIBRARY_PATHS) $(COMPILER_FLAGS) $(LINKER_FLAGS) -o $(OBJ_NAME)
+
+release: $(OBJS)
+	$(CXX) $(OBJS) $(INCLUDE_PATHS) $(LIBRARY_PATHS) $(RELEASE_COMPILER_FLAGS) $(LINKER_FLAGS) -o $(OBJ_NAME)
