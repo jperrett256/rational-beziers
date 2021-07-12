@@ -11,7 +11,7 @@ COMPILER_FLAGS = -Wall
 RELEASE_COMPILER_FLAGS = -mwindows
 
 # TODO what is lmingw32 doing here?
-LINKER_FLAGS = -lmingw32 -lSDL2main -lSDL2
+LINKER_FLAGS = -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf
 
 OBJS = bezier.c
 OBJ_NAME = output
