@@ -25,7 +25,7 @@ typedef struct {
 	Point points[4];
 	float sliders[4];
 	MouseSelectionState selected;
-	int selectedIndex;
+	int selected_index;
 } RenderState;
 
 
@@ -43,8 +43,8 @@ Point cubicBezier(double t, Point w[4]) {
 }
 
 void drawPoint(Point p, SDL_Renderer * renderer) {
-	SDL_Rect pointRect = { p.x - POINT_SIZE / 2, p.y - POINT_SIZE / 2, POINT_SIZE, POINT_SIZE };
-	SDL_RenderFillRect(renderer, &pointRect);
+	SDL_Rect point_rect = { p.x - POINT_SIZE / 2, p.y - POINT_SIZE / 2, POINT_SIZE, POINT_SIZE };
+	SDL_RenderFillRect(renderer, &point_rect);
 }
 
 bool checkMouseOnPoint(int x, int y, Point p) {
@@ -54,8 +54,8 @@ bool checkMouseOnPoint(int x, int y, Point p) {
 // updates render state based on mouse events
 void handleMouseUpdates(RenderState * state, SDL_Event e) {
 	if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEMOTION) {
-		int mouseX, mouseY;
-		SDL_GetMouseState(&mouseX, &mouseY);
+		int mouse_x, mouse_y;
+		SDL_GetMouseState(&mouse_x, &mouse_y);
 
 		switch (e.type) {
 			case SDL_MOUSEBUTTONDOWN:
@@ -63,9 +63,9 @@ void handleMouseUpdates(RenderState * state, SDL_Event e) {
 				// TODO this might cause issues with overlapping points?
 				// TODO could instead find closest point and see if it overlaps
 				for (int i = 0; i < 4; i++) {
-					if (checkMouseOnPoint(mouseX, mouseY, state->points[i])) {
+					if (checkMouseOnPoint(mouse_x, mouse_y, state->points[i])) {
 						state->selected = MOUSE_SELECTED_POINT;
-						state->selectedIndex = i;
+						state->selected_index = i;
 						break;
 					}
 				}
@@ -85,10 +85,10 @@ void handleMouseUpdates(RenderState * state, SDL_Event e) {
 			{
 				switch (state->selected) {
 					case MOUSE_SELECTED_POINT:
-						state->points[state->selectedIndex] = (Point) { mouseX, mouseY };
+						state->points[state->selected_index] = (Point) { mouse_x, mouse_y };
 						break;
 					case MOUSE_SELECTED_SLIDER:
-						state->sliders[state->selectedIndex] = 0; // TODO
+						state->sliders[state->selected_index] = 0; // TODO
 						break;
 					default:
 						assert(state->selected == MOUSE_SELECTED_NONE);
@@ -135,63 +135,64 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
 	drawPoint(state->points[1], renderer);
 	drawPoint(state->points[2], renderer);
 
+	/* TODO all of these const values should probably be macro constants
+	   TODO that said, easier to leave it this way if screen height and width
+	   are ever to be dynamic
+	*/
 
 	// draw container for sliders
-	const int sliderContainerOuterPadding = 20;
-	const int sliderContainerWidth = SCREEN_WIDTH / 2 - sliderContainerOuterPadding;
-	const int sliderContainerHeight = SCREEN_HEIGHT / 6;
+	const int slider_box_outer_padding = 20;
+	const int slider_box_width = SCREEN_WIDTH / 2 - slider_box_outer_padding;
+	const int slider_box_height = SCREEN_HEIGHT / 6;
 	SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x00, 0xAA);
-	SDL_Rect containerRect = {
-		SCREEN_WIDTH - sliderContainerWidth - sliderContainerOuterPadding,
-		SCREEN_HEIGHT - sliderContainerHeight - sliderContainerOuterPadding,
-		sliderContainerWidth,
-		sliderContainerHeight,
+	SDL_Rect box_rect = {
+		SCREEN_WIDTH - slider_box_width - slider_box_outer_padding,
+		SCREEN_HEIGHT - slider_box_height - slider_box_outer_padding,
+		slider_box_width,
+		slider_box_height,
 	};
-	SDL_RenderFillRect(renderer, &containerRect);
+	SDL_RenderFillRect(renderer, &box_rect);
 
-	// draw slider lines
-	const int sliderContainerInnerPadding = sliderContainerHeight / 5;
+	// draw slider lines and TODO text
+	const int slider_box_inner_padding = slider_box_height / 5;
 	SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
 	for (int i = 0; i < 4; i++) {
 		// calculating in full here to avoid integer rounding errors, subtracting 1 accounts for line height (1 pixel)
-		int currentRowOffset = (sliderContainerHeight - sliderContainerInnerPadding * 2 - 1) * i / 3;
-		int y = containerRect.y + sliderContainerInnerPadding + currentRowOffset;
+		int current_row_offset = (slider_box_height - slider_box_inner_padding * 2 - 1) * i / 3;
+		int line_y = box_rect.y + slider_box_inner_padding + current_row_offset;
 
-		int lineWidth = (sliderContainerWidth - sliderContainerInnerPadding * 2) * 3/4;
-		int x1 = containerRect.x + sliderContainerInnerPadding;
-		int x2 = x1 + lineWidth;
+		int line_width = (slider_box_width - slider_box_inner_padding * 2) * 3/4;
+		int x1 = box_rect.x + slider_box_inner_padding;
+		int x2 = x1 + line_width;
 
-		SDL_RenderDrawLine(renderer, x1, y, x2, y);
+		SDL_RenderDrawLine(renderer, x1, line_y, x2, line_y);
 	}
 
 	// TODO slider points
 
 	// TODO text
-	SDL_Surface * textSurface = TTF_RenderText_Solid(font, "hello", (SDL_Color) { 0, 0, 0 });
-	if (!textSurface) {
+	SDL_Surface * text_surface = TTF_RenderText_Solid(font, "hello", (SDL_Color) { 0, 0, 0 });
+	if (!text_surface) {
 		printf("Failed to render text surface: %s\n", TTF_GetError());
 		return false;
 	}
 
-	SDL_Texture * textTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
-	if (!textTexture) {
+	SDL_Texture * text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
+	if (!text_texture) {
 		printf("Failed to create texture from rendered text: %s\n", SDL_GetError());
 		return false;
 	}
 
-	int textWidth = textSurface->w;
-	int textHeight = textSurface->h;
-	// int textHeight = 32;
-	// int textWidth = textSurface->w * textHeight / textSurface->h;
-	SDL_FreeSurface(textSurface);
+	int text_width = text_surface->w;
+	int text_height = text_surface->h;
+	SDL_FreeSurface(text_surface);
 
-	// TODO textX textY
-	int textX = (SCREEN_WIDTH - textWidth) / 2;
-	int textY = (SCREEN_HEIGHT - textHeight) / 2;
+	int text_x = (SCREEN_WIDTH - text_width) / 2;
+	int text_y = (SCREEN_HEIGHT - text_height) / 2;
 
-	SDL_Rect dstRect = { textX, textY, textWidth, textHeight };
-	SDL_RenderCopyEx(renderer, textTexture, NULL, &dstRect, 0, NULL, SDL_FLIP_NONE);
-	SDL_DestroyTexture(textTexture);
+	SDL_Rect text_rect = { text_x, text_y, text_width, text_height };
+	SDL_RenderCopyEx(renderer, text_texture, NULL, &text_rect, 0, NULL, SDL_FLIP_NONE);
+	SDL_DestroyTexture(text_texture);
 
 	// update screen
 	SDL_RenderPresent(renderer);
@@ -239,10 +240,10 @@ int main(int argc, char * argv[]) {
 		goto cleanup;
 	}
 
-	const char fontPath[] = "fonts/m5x7.ttf";
-	font = TTF_OpenFont(fontPath, 32); // ptsize = 16, 32, 48, etc.
+	const char font_path[] = "fonts/m5x7.ttf";
+	font = TTF_OpenFont(font_path, 32); // ptsize = 16, 32, 48, etc.
 	if (!font) {
-		printf("Could not open font at path %s: %s\n", fontPath, TTF_GetError());
+		printf("Could not open font at path %s: %s\n", font_path, TTF_GetError());
 		goto cleanup;
 	}
 
