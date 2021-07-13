@@ -153,46 +153,49 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
 	};
 	SDL_RenderFillRect(renderer, &box_rect);
 
-	// draw slider lines and TODO text
+	// draw slider lines, text, and points
 	const int slider_box_inner_padding = slider_box_height / 5;
 	SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
 	for (int i = 0; i < 4; i++) {
 		// calculating in full here to avoid integer rounding errors, subtracting 1 accounts for line height (1 pixel)
 		int current_row_offset = (slider_box_height - slider_box_inner_padding * 2 - 1) * i / 3;
-		int line_y = box_rect.y + slider_box_inner_padding + current_row_offset;
+		int current_y = box_rect.y + slider_box_inner_padding + current_row_offset;
 
+		/* slider lines */
 		int line_width = (slider_box_width - slider_box_inner_padding * 2) * 3/4;
 		int x1 = box_rect.x + slider_box_inner_padding;
 		int x2 = x1 + line_width;
 
-		SDL_RenderDrawLine(renderer, x1, line_y, x2, line_y);
+		SDL_RenderDrawLine(renderer, x1, current_y, x2, current_y);
+
+		/* slider text */
+		// TODO set text
+		SDL_Surface * text_surface = TTF_RenderText_Solid(font, "1.00", (SDL_Color) { 0xFF, 0xFF, 0xFF });
+		if (!text_surface) {
+			printf("Failed to render text surface: %s\n", TTF_GetError());
+			return false;
+		}
+
+		SDL_Texture * text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
+		if (!text_texture) {
+			printf("Failed to create texture from rendered text: %s\n", SDL_GetError());
+			return false;
+		}
+
+		int text_width = text_surface->w;
+		int text_height = text_surface->h;
+		SDL_FreeSurface(text_surface);
+
+		int text_x = box_rect.x + box_rect.w - slider_box_inner_padding - text_width;
+		int text_y = current_y - text_height / 2;
+
+		SDL_Rect text_rect = { text_x, text_y, text_width, text_height };
+		SDL_RenderCopyEx(renderer, text_texture, NULL, &text_rect, 0, NULL, SDL_FLIP_NONE);
+		SDL_DestroyTexture(text_texture);
+
+		/* slider points*/
+		// TODO
 	}
-
-	// TODO slider points
-
-	// TODO text
-	SDL_Surface * text_surface = TTF_RenderText_Solid(font, "hello", (SDL_Color) { 0, 0, 0 });
-	if (!text_surface) {
-		printf("Failed to render text surface: %s\n", TTF_GetError());
-		return false;
-	}
-
-	SDL_Texture * text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
-	if (!text_texture) {
-		printf("Failed to create texture from rendered text: %s\n", SDL_GetError());
-		return false;
-	}
-
-	int text_width = text_surface->w;
-	int text_height = text_surface->h;
-	SDL_FreeSurface(text_surface);
-
-	int text_x = (SCREEN_WIDTH - text_width) / 2;
-	int text_y = (SCREEN_HEIGHT - text_height) / 2;
-
-	SDL_Rect text_rect = { text_x, text_y, text_width, text_height };
-	SDL_RenderCopyEx(renderer, text_texture, NULL, &text_rect, 0, NULL, SDL_FLIP_NONE);
-	SDL_DestroyTexture(text_texture);
 
 	// update screen
 	SDL_RenderPresent(renderer);
@@ -241,7 +244,7 @@ int main(int argc, char * argv[]) {
 	}
 
 	const char font_path[] = "fonts/m5x7.ttf";
-	font = TTF_OpenFont(font_path, 32); // ptsize = 16, 32, 48, etc.
+	font = TTF_OpenFont(font_path, 16); // ptsize = 16, 32, 48, etc.
 	if (!font) {
 		printf("Could not open font at path %s: %s\n", font_path, TTF_GetError());
 		goto cleanup;
