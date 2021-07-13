@@ -208,15 +208,18 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
     int sliders_x1;
     int sliders_x2;
 
-    // could do first iteration outside loop to avoid doing the same stuff repeatedly
+    // TODO could do first iteration outside loop to avoid doing the same stuff repeatedly
     for (int i = 0; i < 4; i++) {
         // calculating in full here to avoid integer rounding errors, subtracting 1 accounts for line height (1 pixel)
         int current_row_offset = (slider_box_height - slider_box_inner_padding * 2 - 1) * i / 3;
         int current_y = box_rect.y + slider_box_inner_padding + current_row_offset;
 
         /* slider text */
-        // TODO set text
-        SDL_Surface * text_surface = TTF_RenderText_Solid(font, "2.34", (SDL_Color) { 0xFF, 0xFF, 0xFF });
+
+        char text_string[5];
+        snprintf(text_string, 5, "%.2f", state->sliders_value[i]);
+
+        SDL_Surface * text_surface = TTF_RenderText_Solid(font, text_string, (SDL_Color) { 0xFF, 0xFF, 0xFF });
         if (!text_surface) {
             printf("Failed to render text surface: %s\n", TTF_GetError());
             return false;
