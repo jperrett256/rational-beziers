@@ -27,6 +27,8 @@ typedef enum {
 typedef struct {
 	Point points[4];
 	float sliders[4];
+	int sliders_x1, sliders_x2;
+	int sliders_y[4];
 	MouseSelectionState selected;
 	int selected_index;
 } RenderState;
@@ -65,6 +67,7 @@ void handleMouseUpdates(RenderState * state, SDL_Event e) {
 			{
 				// TODO this might cause issues with overlapping points?
 				// TODO could instead find closest point and see if it overlaps
+				/* Bezier points */
 				for (int i = 0; i < 4; i++) {
 					if (checkMouseOnPoint(mouse_x, mouse_y, state->points[i])) {
 						state->selected = MOUSE_SELECTED_POINT;
@@ -73,10 +76,22 @@ void handleMouseUpdates(RenderState * state, SDL_Event e) {
 					}
 				}
 
-				// TODO handle click on sliders, but avoid handling event twice
+				if (state->selected != MOUSE_SELECTED_NONE) break;
+
+				/* slider points */
+				int x1 = state->sliders_x1, x2 = state->sliders_x2;
+				assert(x1 != x2);
 				for (int i = 0; i < 4; i++) {
-					// TODO
+					// TODO slider_x formula copied from below - make function?
+					int slider_x = x1 + (state->sliders[i] - SLIDER_MIN) * (x2 - x1) / (SLIDER_MAX - SLIDER_MIN);
+					int slider_y = state->sliders_y[i];
+					if (checkMouseOnPoint(mouse_x, mouse_y, (Point) { slider_x, slider_y })) {
+						state->selected = MOUSE_SELECTED_SLIDER;
+						state->selected_index = i;
+						break;
+					}
 				}
+
 			} break;
 
 			case SDL_MOUSEBUTTONUP:
@@ -161,6 +176,9 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
 
 	// draw slider text, lines and points
 	const int slider_box_inner_padding = slider_box_height / 5;
+
+	int text_width;
+	int text_height;
 	for (int i = 0; i < 4; i++) {
 		// calculating in full here to avoid integer rounding errors, subtracting 1 accounts for line height (1 pixel)
 		int current_row_offset = (slider_box_height - slider_box_inner_padding * 2 - 1) * i / 3;
@@ -168,7 +186,7 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
 
 		/* slider text */
 		// TODO set text
-		SDL_Surface * text_surface = TTF_RenderText_Solid(font, "1.00", (SDL_Color) { 0xFF, 0xFF, 0xFF });
+		SDL_Surface * text_surface = TTF_RenderText_Solid(font, "2.34", (SDL_Color) { 0xFF, 0xFF, 0xFF });
 		if (!text_surface) {
 			printf("Failed to render text surface: %s\n", TTF_GetError());
 			return false;
@@ -181,8 +199,11 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
 			return false;
 		}
 
-		int text_width = text_surface->w;
-		int text_height = text_surface->h;
+		assert(i == 0 || text_width == text_surface->w);
+		assert(i == 0 || text_height == text_surface->h);
+
+		text_width = text_surface->w;
+		text_height = text_surface->h;
 		SDL_FreeSurface(text_surface);
 
 		int text_x = box_rect.x + box_rect.w - slider_box_inner_padding - text_width;
@@ -196,16 +217,23 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
 		int line_width = slider_box_width - slider_box_inner_padding * 3 - text_width;
 		int x1 = box_rect.x + slider_box_inner_padding;
 		int x2 = x1 + line_width;
+		/* TODO is it possible for x1 and x2 to vary? assuming it won't, but we calculate
+		   it every time anyway...
+		   If it can vary (e.g. because the font isn't monospace, and text_width varies),
+		   we kinda need it not to, so we can just use the older solution? */
 
 		SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
 		SDL_RenderDrawLine(renderer, x1, current_y, x2, current_y);
 
 		/* slider points*/
 
+		// TODO make function? getSliderX?
 		int point_x = x1 + (state->sliders[i] - SLIDER_MIN) * (x2 - x1) / (SLIDER_MAX - SLIDER_MIN);
 		SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
 		drawPoint(renderer, (Point) { point_x, current_y });
-		// TODO
+
+		/* update render state*/
+		// TODO sliders_x1, sliders_x2, sliders_y
 	}
 
 	// update screen
@@ -214,7 +242,8 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
 	return true;
 }
 
-// TODO use snake case instead of camel case for local variables everywhere?
+// TODO use snake case instead of camel case for functions everywhere?
+// TODO also, tabs to spaces please
 int main(int argc, char * argv[]) {
 	SDL_Window * window = NULL;
 	SDL_Renderer * renderer = NULL;
