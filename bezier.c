@@ -347,10 +347,13 @@ int main(int argc, char * argv[]) {
         while (!quit) {
             while (SDL_PollEvent(&e)) {
                 if (e.type == SDL_QUIT) quit = true;
+                handleMouseUpdates(&state, e);
             }
 
-            handleMouseUpdates(&state, e);
-            render(&state, renderer, font); // TODO check for error
+            if (!render(&state, renderer, font)) {
+                printf("Failed to render frame\n");
+                goto cleanup;
+            }
         }
     }
 
