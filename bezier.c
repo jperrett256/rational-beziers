@@ -1,9 +1,10 @@
-#include "SDL.h"
-#include "SDL_ttf.h"
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <assert.h>
+
+#include "SDL.h"
+#include "SDL_ttf.h"
 
 const int SCREEN_WIDTH = 640;
 const int SCREEN_HEIGHT = 480;
@@ -26,7 +27,7 @@ typedef enum {
 
 typedef struct {
 	Point points[4];
-	float sliders[4];
+	float sliders_value[4];
 	int sliders_x1, sliders_x2;
 	int sliders_y[4];
 	MouseSelectionState selected;
@@ -56,6 +57,19 @@ bool checkMouseOnPoint(int x, int y, Point p) {
 	return x < p.x + POINT_SIZE / 2 && x >= p.x - POINT_SIZE / 2 && y < p.y + POINT_SIZE / 2 && y >= p.y - POINT_SIZE / 2;
 }
 
+int sliderValueToX(float value, int x1, int x2) {
+	assert(SLIDER_MAX > SLIDER_MIN);
+	assert(x2 > x1);
+	return x1 + (value - SLIDER_MIN) * (x2 - x1) / (SLIDER_MAX - SLIDER_MIN);
+}
+
+float sliderXToValue(int x, int x1, int x2) {
+	assert(SLIDER_MAX > SLIDER_MIN);
+	assert(x2 > x1);
+	assert(x1 <= x && x <= x2);
+	return SLIDER_MIN + (x - x1) * (SLIDER_MAX - SLIDER_MIN) / (x2 - x1);
+}
+
 // updates render state based on mouse events
 void handleMouseUpdates(RenderState * state, SDL_Event e) {
 	if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEMOTION) {
@@ -80,10 +94,9 @@ void handleMouseUpdates(RenderState * state, SDL_Event e) {
 
 				/* slider points */
 				int x1 = state->sliders_x1, x2 = state->sliders_x2;
-				assert(x1 != x2);
+
 				for (int i = 0; i < 4; i++) {
-					// TODO slider_x formula copied from below - make function?
-					int slider_x = x1 + (state->sliders[i] - SLIDER_MIN) * (x2 - x1) / (SLIDER_MAX - SLIDER_MIN);
+					int slider_x = sliderValueToX(state->sliders_value[i], x1, x2);
 					int slider_y = state->sliders_y[i];
 					if (checkMouseOnPoint(mouse_x, mouse_y, (Point) { slider_x, slider_y })) {
 						state->selected = MOUSE_SELECTED_SLIDER;
@@ -96,21 +109,34 @@ void handleMouseUpdates(RenderState * state, SDL_Event e) {
 
 			case SDL_MOUSEBUTTONUP:
 			{
-				state->selected = false;
+				state->selected = MOUSE_SELECTED_NONE;
+				printf("DESELECTED\n");
 			} break;
 
 			case SDL_MOUSEMOTION:
 			{
 				switch (state->selected) {
 					case MOUSE_SELECTED_POINT:
+					{
 						state->points[state->selected_index] = (Point) { mouse_x, mouse_y };
-						break;
+					} break;
+
 					case MOUSE_SELECTED_SLIDER:
+					{
+
 						/* TODO how are we going to get x1 and x2 from our render
 						   function here? Calculate what we need external to both
 						   functions? Pass through render state? */
-						state->sliders[state->selected_index] = 0; // TODO
-						break;
+						int x1 = state->sliders_x1, x2 = state->sliders_x2;
+
+						int slider_x = mouse_x;
+						if (slider_x < x1) slider_x = x1;
+						if (slider_x > x2) slider_x = x2;
+
+						state->sliders_value[state->selected_index] = sliderXToValue(slider_x, x1, x2); // TODO
+
+					} break;
+
 					default:
 						assert(state->selected == MOUSE_SELECTED_NONE);
 				}
@@ -177,8 +203,13 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
 	// draw slider text, lines and points
 	const int slider_box_inner_padding = slider_box_height / 5;
 
+	// these variables remain constant between iterations in the following loop
 	int text_width;
 	int text_height;
+	int sliders_x1;
+	int sliders_x2;
+
+	// could do first iteration outside loop to avoid doing the same stuff repeatedly
 	for (int i = 0; i < 4; i++) {
 		// calculating in full here to avoid integer rounding errors, subtracting 1 accounts for line height (1 pixel)
 		int current_row_offset = (slider_box_height - slider_box_inner_padding * 2 - 1) * i / 3;
@@ -199,6 +230,7 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
 			return false;
 		}
 
+		// check text size remains constant (assuming monospace font)
 		assert(i == 0 || text_width == text_surface->w);
 		assert(i == 0 || text_height == text_surface->h);
 
@@ -214,27 +246,35 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
 		SDL_DestroyTexture(text_texture);
 
 		/* slider lines */
+
 		int line_width = slider_box_width - slider_box_inner_padding * 3 - text_width;
+		/* TODO x1 and x2 can only vary if we change the screen to be resizable, but
+		   even then presumably not during calls to render(), so it would stay constant
+		   in this loop */
 		int x1 = box_rect.x + slider_box_inner_padding;
 		int x2 = x1 + line_width;
-		/* TODO is it possible for x1 and x2 to vary? assuming it won't, but we calculate
-		   it every time anyway...
-		   If it can vary (e.g. because the font isn't monospace, and text_width varies),
-		   we kinda need it not to, so we can just use the older solution? */
+
+		assert(i == 0 || sliders_x1 == x1);
+		assert(i == 0 || sliders_x2 == x2);
+		sliders_x1 = x1;
+		sliders_x2 = x2;
 
 		SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
 		SDL_RenderDrawLine(renderer, x1, current_y, x2, current_y);
 
 		/* slider points*/
 
-		// TODO make function? getSliderX?
-		int point_x = x1 + (state->sliders[i] - SLIDER_MIN) * (x2 - x1) / (SLIDER_MAX - SLIDER_MIN);
+		int point_x = sliderValueToX(state->sliders_value[i], x1, x2);
 		SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
 		drawPoint(renderer, (Point) { point_x, current_y });
 
 		/* update render state*/
-		// TODO sliders_x1, sliders_x2, sliders_y
+		state->sliders_y[i] = current_y;
 	}
+
+	/* update render state*/
+	state->sliders_x1 = sliders_x1;
+	state->sliders_x2 = sliders_x2;
 
 	// update screen
 	SDL_RenderPresent(renderer);
@@ -302,7 +342,7 @@ int main(int argc, char * argv[]) {
 		state.points[3] = (Point) { SCREEN_WIDTH * 3 / 4, SCREEN_HEIGHT / 4 };
 
 		for (int i = 0; i < 4; i++) {
-			state.sliders[i] = 1.00f;
+			state.sliders_value[i] = 1.00f;
 		}
 
 		while (!quit) {
