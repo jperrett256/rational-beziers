@@ -115,6 +115,14 @@ void draw_line_between_points(SDL_Renderer * renderer, Point p1, Point p2) {
 }
 
 bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
+    bool success = true;
+
+    if (SDL_LockMutex(state->mutex)) {
+        printf("Failed to lock mutex: %s\n", SDL_GetError());
+        success = false;
+        goto render_end;
+    }
+
     // clear screen
     SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
     SDL_RenderClear(renderer);
@@ -192,14 +200,16 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
         SDL_Surface * text_surface = TTF_RenderText_Solid(font, text_string, (SDL_Color) { 0xFF, 0xFF, 0xFF });
         if (!text_surface) {
             printf("Failed to render text surface: %s\n", TTF_GetError());
-            return false;
+            success = false;
+            goto render_end;
         }
 
         SDL_Texture * text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
         if (!text_texture) {
             SDL_FreeSurface(text_surface);
             printf("Failed to create texture from rendered text: %s\n", SDL_GetError());
-            return false;
+            success = false;
+            goto render_end;
         }
 
         // check text size remains constant (assuming monospace font)
@@ -251,7 +261,15 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
     // update screen
     SDL_RenderPresent(renderer);
 
-    return true;
+    if (SDL_UnlockMutex(state->mutex)) {
+        printf("Failed to lock mutex: %s\n", SDL_GetError());
+        success = false;
+        goto render_end;
+    }
+
+render_end:
+
+    return success;
 }
 
 void handle_window_events(SDL_Event e, RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
@@ -260,8 +278,18 @@ void handle_window_events(SDL_Event e, RenderState * state, SDL_Renderer * rende
     switch (e.window.event) {
         case SDL_WINDOWEVENT_SIZE_CHANGED:
         {
+            if (SDL_LockMutex(state->mutex)) {
+                printf("Failed to lock mutex: %s\n", SDL_GetError());
+                assert(0); // don't care about clean exit, just die
+            }
+
             state->window_width = e.window.data1;
             state->window_height = e.window.data2;
+
+            if (SDL_UnlockMutex(state->mutex)) {
+                printf("Failed to lock mutex: %s\n", SDL_GetError());
+                assert(0); // don't care about clean exit, just die
+            }
             // TODO not getting the updates during resizing, only at the end
             printf("width: %d, height: %d\n", state->window_width, state->window_height); // DEBUG
             render(state, renderer, font); // rerender
@@ -275,11 +303,11 @@ void handle_window_events(SDL_Event e, RenderState * state, SDL_Renderer * rende
         //     render(state, renderer, font); // rerender
         // } break;
 
-        case SDL_WINDOWEVENT_EXPOSED:
-        {
-            // TODO what does this do?
-            render(state, renderer, font); // rerender
-        } break;
+        // case SDL_WINDOWEVENT_EXPOSED:
+        // {
+        //     // TODO what does this do?
+        //     render(state, renderer, font); // rerender
+        // } break;
     }
 }
 
@@ -370,7 +398,7 @@ int main(int argc, char * argv[]) {
     // initialise SDL
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         printf("SDL could not initialise: %s\n", SDL_GetError());
-        goto cleanup;
+        goto main_cleanup;
     }
 
     // set texture filtering to linear
@@ -389,14 +417,14 @@ int main(int argc, char * argv[]) {
     );
     if (!window) {
         printf("Window could not be created: %s\n", SDL_GetError());
-        goto cleanup;
+        goto main_cleanup;
     }
 
     // create renderer
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (!renderer) {
         printf("Renderer could not be created: %s\n", SDL_GetError());
-        goto cleanup;
+        goto main_cleanup;
     }
 
     if (SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND)) {
@@ -405,14 +433,14 @@ int main(int argc, char * argv[]) {
 
     if (TTF_Init()) {
         printf("SDL_ttf could not initialize: %s\n", TTF_GetError());
-        goto cleanup;
+        goto main_cleanup;
     }
 
     const char font_path[] = "fonts/m5x7.ttf";
     font = TTF_OpenFont(font_path, 16); // ptsize = 16, 32, 48, etc.
     if (!font) {
         printf("Could not open font at path %s: %s\n", font_path, TTF_GetError());
-        goto cleanup;
+        goto main_cleanup;
     }
 
     {
@@ -423,7 +451,7 @@ int main(int argc, char * argv[]) {
         RenderState state = {0};
         if (!RenderState_init(&state)) {
             printf("Failed to intialise render state\n");
-            goto render_cleanup;
+            goto main_render_cleanup;
         }
 
         while (!quit) {
@@ -435,16 +463,16 @@ int main(int argc, char * argv[]) {
 
             if (!render(&state, renderer, font)) {
                 printf("Failed to render frame\n");
-                goto render_cleanup;
+                goto main_render_cleanup;
             }
         }
 
-render_cleanup:
+main_render_cleanup:
         RenderState_cleanup(&state);
     }
 
 
-cleanup:
+main_cleanup:
     // TODO destroy font texture
     TTF_CloseFont(font);
     SDL_DestroyRenderer(renderer);
