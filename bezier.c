@@ -73,97 +73,6 @@ float sliderXToValue(int x, int x1, int x2) {
     return SLIDER_MIN + (x - x1) * (SLIDER_MAX - SLIDER_MIN) / (x2 - x1);
 }
 
-void handleWindowEvents(RenderState * state, SDL_Event e) {
-    if (e.type != SDL_WINDOWEVENT) return;
-
-    switch (e.window.event) {
-        case SDL_WINDOWEVENT_SIZE_CHANGED:
-        {
-            state->window_width = e.window.data1;
-            state->window_height = e.window.data2;
-            // TODO rerender?
-            break;
-        }
-    }
-}
-
-// updates render state based on mouse events
-void handleMouseEvents(RenderState * state, SDL_Event e) {
-    if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEMOTION) {
-        int mouse_x, mouse_y;
-        SDL_GetMouseState(&mouse_x, &mouse_y);
-
-        switch (e.type) {
-            case SDL_MOUSEBUTTONDOWN:
-            {
-                /* TODO could instead handle overlapping points by finding closest
-                point to cursor and applying checkMouseOnPoint to just that */
-
-                /* Bezier points */
-                for (int i = 0; i < 4; i++) {
-                    if (checkMouseOnPoint(mouse_x, mouse_y, state->points[i])) {
-                        state->selected = MOUSE_SELECTED_POINT;
-                        state->selected_index = i;
-                        break;
-                    }
-                }
-
-                if (state->selected != MOUSE_SELECTED_NONE) break;
-
-                /* slider points */
-                int x1 = state->sliders_x1;
-                int x2 = state->sliders_x2;
-
-                for (int i = 0; i < 4; i++) {
-                    int slider_x = sliderValueToX(state->sliders_value[i], x1, x2);
-                    int slider_y = state->sliders_y[i];
-                    if (checkMouseOnPoint(mouse_x, mouse_y, (Point) { slider_x, slider_y })) {
-                        state->selected = MOUSE_SELECTED_SLIDER;
-                        state->selected_index = i;
-                        break;
-                    }
-                }
-
-            } break;
-
-            case SDL_MOUSEBUTTONUP:
-            {
-                state->selected = MOUSE_SELECTED_NONE;
-            } break;
-
-            case SDL_MOUSEMOTION:
-            {
-                switch (state->selected) {
-                    case MOUSE_SELECTED_POINT:
-                    {
-                        state->points[state->selected_index] = (Point) { mouse_x, mouse_y };
-                    } break;
-
-                    case MOUSE_SELECTED_SLIDER:
-                    {
-
-                        /* TODO how are we going to get x1 and x2 from our render
-                           function here? Calculate what we need external to both
-                           functions? Pass through render state? */
-                        int x1 = state->sliders_x1;
-                        int x2 = state->sliders_x2;
-
-                        int slider_x = mouse_x;
-                        if (slider_x < x1) slider_x = x1;
-                        if (slider_x > x2) slider_x = x2;
-
-                        state->sliders_value[state->selected_index] = sliderXToValue(slider_x, x1, x2); // TODO
-
-                    } break;
-
-                    default:
-                        assert(state->selected == MOUSE_SELECTED_NONE);
-                }
-            } break;
-        }
-    }
-}
-
 void drawLineBetweenPoints(SDL_Renderer * renderer, Point p1, Point p2) {
     SDL_RenderDrawLine(renderer, p1.x, p1.y, p2.x, p2.y);
 }
@@ -308,6 +217,112 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
     return true;
 }
 
+void handleWindowEvents(SDL_Event e, RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
+    if (e.type != SDL_WINDOWEVENT) return;
+
+    switch (e.window.event) {
+        case SDL_WINDOWEVENT_SIZE_CHANGED:
+        {
+            state->window_width = e.window.data1;
+            state->window_height = e.window.data2;
+            // TODO not getting the updates during resizing, only at the end
+            printf("width: %d, height: %d\n", state->window_width, state->window_height); // DEBUG
+            render(state, renderer, font); // rerender
+        } break;
+
+        // case SDL_WINDOWEVENT_RESIZED:
+        // {
+        //     state->window_width = e.window.data1;
+        //     state->window_height = e.window.data2;
+        //     printf("width: %d, height: %d\n", state->window_width, state->window_height); // DEBUG
+        //     render(state, renderer, font); // rerender
+        // } break;
+
+        case SDL_WINDOWEVENT_EXPOSED:
+        {
+            // TODO what does this do?
+            render(state, renderer, font); // rerender
+        } break;
+    }
+}
+
+// updates render state based on mouse events
+void handleMouseEvents(SDL_Event e, RenderState * state) {
+    if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEMOTION) {
+        int mouse_x, mouse_y;
+        SDL_GetMouseState(&mouse_x, &mouse_y);
+
+        switch (e.type) {
+            case SDL_MOUSEBUTTONDOWN:
+            {
+                /* TODO could instead handle overlapping points by finding closest
+                point to cursor and applying checkMouseOnPoint to just that */
+
+                /* Bezier points */
+                for (int i = 0; i < 4; i++) {
+                    if (checkMouseOnPoint(mouse_x, mouse_y, state->points[i])) {
+                        state->selected = MOUSE_SELECTED_POINT;
+                        state->selected_index = i;
+                        break;
+                    }
+                }
+
+                if (state->selected != MOUSE_SELECTED_NONE) break;
+
+                /* slider points */
+                int x1 = state->sliders_x1;
+                int x2 = state->sliders_x2;
+
+                for (int i = 0; i < 4; i++) {
+                    int slider_x = sliderValueToX(state->sliders_value[i], x1, x2);
+                    int slider_y = state->sliders_y[i];
+                    if (checkMouseOnPoint(mouse_x, mouse_y, (Point) { slider_x, slider_y })) {
+                        state->selected = MOUSE_SELECTED_SLIDER;
+                        state->selected_index = i;
+                        break;
+                    }
+                }
+
+            } break;
+
+            case SDL_MOUSEBUTTONUP:
+            {
+                state->selected = MOUSE_SELECTED_NONE;
+            } break;
+
+            case SDL_MOUSEMOTION:
+            {
+                switch (state->selected) {
+                    case MOUSE_SELECTED_POINT:
+                    {
+                        state->points[state->selected_index] = (Point) { mouse_x, mouse_y };
+                    } break;
+
+                    case MOUSE_SELECTED_SLIDER:
+                    {
+
+                        /* TODO how are we going to get x1 and x2 from our render
+                           function here? Calculate what we need external to both
+                           functions? Pass through render state? */
+                        int x1 = state->sliders_x1;
+                        int x2 = state->sliders_x2;
+
+                        int slider_x = mouse_x;
+                        if (slider_x < x1) slider_x = x1;
+                        if (slider_x > x2) slider_x = x2;
+
+                        state->sliders_value[state->selected_index] = sliderXToValue(slider_x, x1, x2); // TODO
+
+                    } break;
+
+                    default:
+                        assert(state->selected == MOUSE_SELECTED_NONE);
+                }
+            } break;
+        }
+    }
+}
+
 // TODO use snake case instead of camel case for functions everywhere?
 // TODO also, tabs to spaces please
 int main(int argc, char * argv[]) {
@@ -391,8 +406,8 @@ int main(int argc, char * argv[]) {
         while (!quit) {
             while (SDL_PollEvent(&e)) {
                 if (e.type == SDL_QUIT) quit = true;
-                handleWindowEvents(&state, e);
-                handleMouseEvents(&state, e);
+                handleWindowEvents(e, &state, renderer, font);
+                handleMouseEvents(e, &state);
             }
 
             if (!render(&state, renderer, font)) {
