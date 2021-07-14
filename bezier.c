@@ -35,10 +35,47 @@ typedef struct {
     int selected_index;
     int window_width;
     int window_height;
+    SDL_mutex * mutex;
 } RenderState;
 
+/* TODO may want to change convention to returning true on error
+   This would apply to RenderState_init and render
+   Means we can change the return values in a consistent manner
+*/
+bool RenderState_init(RenderState * state) {
+    assert(!state->mutex);
 
-Point cubicBezier(double t, Point w[4]) {
+    int win_width = INITIAL_SCREEN_WIDTH;
+    int win_height = INITIAL_SCREEN_HEIGHT;
+
+    state->points[0] = (Point) { win_width / 4, win_height / 4 };
+    state->points[1] = (Point) { win_width / 4, win_height * 3 / 4 };
+    state->points[2] = (Point) { win_width * 3 / 4, win_height * 3 / 4 };
+    state->points[3] = (Point) { win_width * 3 / 4, win_height / 4 };
+
+    for (int i = 0; i < 4; i++) {
+        state->sliders_value[i] = 1.00f;
+    }
+
+    state->window_width = win_width;
+    state->window_height = win_height;
+
+    state->selected = MOUSE_SELECTED_NONE;
+
+    state->mutex = SDL_CreateMutex();
+    if (!state->mutex) {
+        printf("Could not create mutex: %s\n", SDL_GetError());
+        return false;
+    }
+
+    return true;
+}
+
+void RenderState_cleanup(RenderState * state) {
+    SDL_DestroyMutex(state->mutex);
+}
+
+Point cubic_bezier(double t, Point w[4]) {
     double t2 = t * t;
     double t3 = t2 * t;
     double mt = 1 - t;
@@ -51,29 +88,29 @@ Point cubicBezier(double t, Point w[4]) {
     };
 }
 
-void drawPoint(SDL_Renderer * renderer, Point p) {
+void draw_point(SDL_Renderer * renderer, Point p) {
     SDL_Rect point_rect = { p.x - POINT_SIZE / 2, p.y - POINT_SIZE / 2, POINT_SIZE, POINT_SIZE };
     SDL_RenderFillRect(renderer, &point_rect);
 }
 
-bool checkMouseOnPoint(int x, int y, Point p) {
+bool check_mouse_on_point(int x, int y, Point p) {
     return x < p.x + POINT_SIZE / 2 && x >= p.x - POINT_SIZE / 2 && y < p.y + POINT_SIZE / 2 && y >= p.y - POINT_SIZE / 2;
 }
 
-int sliderValueToX(float value, int x1, int x2) {
+int slider_value_to_x(float value, int x1, int x2) {
     assert(SLIDER_MAX > SLIDER_MIN);
     assert(x2 > x1);
     return x1 + (value - SLIDER_MIN) * (x2 - x1) / (SLIDER_MAX - SLIDER_MIN);
 }
 
-float sliderXToValue(int x, int x1, int x2) {
+float slider_x_to_value(int x, int x1, int x2) {
     assert(SLIDER_MAX > SLIDER_MIN);
     assert(x2 > x1);
     assert(x1 <= x && x <= x2);
     return SLIDER_MIN + (x - x1) * (SLIDER_MAX - SLIDER_MIN) / (x2 - x1);
 }
 
-void drawLineBetweenPoints(SDL_Renderer * renderer, Point p1, Point p2) {
+void draw_line_between_points(SDL_Renderer * renderer, Point p1, Point p2) {
     SDL_RenderDrawLine(renderer, p1.x, p1.y, p2.x, p2.y);
 }
 
@@ -86,29 +123,29 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
     {
         SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0xFF, 0xFF);
 
-        Point prev = cubicBezier(0, state->points);
+        Point prev = cubic_bezier(0, state->points);
         for (int i = 1; i <= 100; i += 1) {
             double t = (double) i / 100;
 
-            Point next = cubicBezier(t, state->points);
-            drawLineBetweenPoints(renderer, prev, next);
+            Point next = cubic_bezier(t, state->points);
+            draw_line_between_points(renderer, prev, next);
             prev = next;
         }
     }
 
     // draw lines between start/end points and control points
     SDL_SetRenderDrawColor(renderer, 0x00, 0xAA, 0xAA, 0xFF);
-    drawLineBetweenPoints(renderer, state->points[0], state->points[1]);
-    drawLineBetweenPoints(renderer, state->points[1], state->points[2]);
-    drawLineBetweenPoints(renderer, state->points[2], state->points[3]);
+    draw_line_between_points(renderer, state->points[0], state->points[1]);
+    draw_line_between_points(renderer, state->points[1], state->points[2]);
+    draw_line_between_points(renderer, state->points[2], state->points[3]);
 
     // draw start/end/control points
     SDL_SetRenderDrawColor(renderer, 0xFF, 0x00, 0x00, 0xFF);
-    drawPoint(renderer, state->points[0]);
-    drawPoint(renderer, state->points[3]);
+    draw_point(renderer, state->points[0]);
+    draw_point(renderer, state->points[3]);
     SDL_SetRenderDrawColor(renderer, 0x00, 0xFF, 0x00, 0xFF);
-    drawPoint(renderer, state->points[1]);
-    drawPoint(renderer, state->points[2]);
+    draw_point(renderer, state->points[1]);
+    draw_point(renderer, state->points[2]);
 
     /* TODO all of these const values should probably be macro constants
        TODO that said, easier to leave it this way if screen height and width
@@ -199,9 +236,9 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
 
         /* slider points*/
 
-        int point_x = sliderValueToX(state->sliders_value[i], x1, x2);
+        int point_x = slider_value_to_x(state->sliders_value[i], x1, x2);
         SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
-        drawPoint(renderer, (Point) { point_x, current_y });
+        draw_point(renderer, (Point) { point_x, current_y });
 
         /* update render state*/
         state->sliders_y[i] = current_y;
@@ -217,7 +254,7 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
     return true;
 }
 
-void handleWindowEvents(SDL_Event e, RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
+void handle_window_events(SDL_Event e, RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
     if (e.type != SDL_WINDOWEVENT) return;
 
     switch (e.window.event) {
@@ -247,7 +284,7 @@ void handleWindowEvents(SDL_Event e, RenderState * state, SDL_Renderer * rendere
 }
 
 // updates render state based on mouse events
-void handleMouseEvents(SDL_Event e, RenderState * state) {
+void handle_mouse_events(SDL_Event e, RenderState * state) {
     if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEMOTION) {
         int mouse_x, mouse_y;
         SDL_GetMouseState(&mouse_x, &mouse_y);
@@ -256,11 +293,11 @@ void handleMouseEvents(SDL_Event e, RenderState * state) {
             case SDL_MOUSEBUTTONDOWN:
             {
                 /* TODO could instead handle overlapping points by finding closest
-                point to cursor and applying checkMouseOnPoint to just that */
+                point to cursor and applying check_mouse_on_point to just that */
 
                 /* Bezier points */
                 for (int i = 0; i < 4; i++) {
-                    if (checkMouseOnPoint(mouse_x, mouse_y, state->points[i])) {
+                    if (check_mouse_on_point(mouse_x, mouse_y, state->points[i])) {
                         state->selected = MOUSE_SELECTED_POINT;
                         state->selected_index = i;
                         break;
@@ -274,9 +311,9 @@ void handleMouseEvents(SDL_Event e, RenderState * state) {
                 int x2 = state->sliders_x2;
 
                 for (int i = 0; i < 4; i++) {
-                    int slider_x = sliderValueToX(state->sliders_value[i], x1, x2);
+                    int slider_x = slider_value_to_x(state->sliders_value[i], x1, x2);
                     int slider_y = state->sliders_y[i];
-                    if (checkMouseOnPoint(mouse_x, mouse_y, (Point) { slider_x, slider_y })) {
+                    if (check_mouse_on_point(mouse_x, mouse_y, (Point) { slider_x, slider_y })) {
                         state->selected = MOUSE_SELECTED_SLIDER;
                         state->selected_index = i;
                         break;
@@ -311,7 +348,7 @@ void handleMouseEvents(SDL_Event e, RenderState * state) {
                         if (slider_x < x1) slider_x = x1;
                         if (slider_x > x2) slider_x = x2;
 
-                        state->sliders_value[state->selected_index] = sliderXToValue(slider_x, x1, x2); // TODO
+                        state->sliders_value[state->selected_index] = slider_x_to_value(slider_x, x1, x2); // TODO
 
                     } break;
 
@@ -383,38 +420,27 @@ int main(int argc, char * argv[]) {
         SDL_Event e;
 
         // initialise render state
-        // TODO initialisation function?
         RenderState state = {0};
-
-        int win_width = INITIAL_SCREEN_WIDTH;
-        int win_height = INITIAL_SCREEN_HEIGHT;
-
-        state.points[0] = (Point) { win_width / 4, win_height / 4 };
-        state.points[1] = (Point) { win_width / 4, win_height * 3 / 4 };
-        state.points[2] = (Point) { win_width * 3 / 4, win_height * 3 / 4 };
-        state.points[3] = (Point) { win_width * 3 / 4, win_height / 4 };
-
-        for (int i = 0; i < 4; i++) {
-            state.sliders_value[i] = 1.00f;
+        if (!RenderState_init(&state)) {
+            printf("Failed to intialise render state\n");
+            goto render_cleanup;
         }
-
-        state.window_width = win_width;
-        state.window_height = win_height;
-
-        state.selected = MOUSE_SELECTED_NONE;
 
         while (!quit) {
             while (SDL_PollEvent(&e)) {
                 if (e.type == SDL_QUIT) quit = true;
-                handleWindowEvents(e, &state, renderer, font);
-                handleMouseEvents(e, &state);
+                handle_window_events(e, &state, renderer, font);
+                handle_mouse_events(e, &state);
             }
 
             if (!render(&state, renderer, font)) {
                 printf("Failed to render frame\n");
-                goto cleanup;
+                goto render_cleanup;
             }
         }
+
+render_cleanup:
+        RenderState_cleanup(&state);
     }
 
 
