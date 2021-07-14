@@ -23,7 +23,7 @@ typedef enum {
     MOUSE_SELECTED_NONE,
     MOUSE_SELECTED_POINT,
     MOUSE_SELECTED_SLIDER,
-    // TODO MOUSE_SELECTED_BACKGROUND?
+    MOUSE_SELECTED_BACKGROUND,
 } MouseSelectionState;
 
 typedef struct {
@@ -34,6 +34,8 @@ typedef struct {
     int sliders_x1;
     int sliders_x2;
     int sliders_y[4];
+    /* background position */
+    Point background_origin;
     /* selection state */
     MouseSelectionState selected;
     int selected_index;
@@ -65,6 +67,10 @@ bool RenderState_init(RenderState * state, SDL_Renderer * renderer, TTF_Font * f
     for (int i = 0; i < 4; i++) {
         state->sliders_value[i] = 1.00f;
     }
+
+    // sliders_x1, sliders_x2, sliders_y to be assigned by render()
+
+    state->background_origin = (Point) { 0, 0 };
 
     state->window_width = win_width;
     state->window_height = win_height;
@@ -98,6 +104,14 @@ Point cubic_bezier(double t, Point w[4]) {
         mt3 * w[0].x + 3 * mt2 * t * w[1].x + 3 * mt * t2 * w[2].x + t3 * w[3].x,
         mt3 * w[0].y + 3 * mt2 * t * w[1].y + 3 * mt * t2 * w[2].y + t3 * w[3].y
     };
+}
+
+Point add_points(Point a, Point b) {
+    return (Point) { a.x + b.x, a.y + b.y };
+}
+
+Point subtract_points(Point a, Point b) {
+    return (Point) { a.x - b.x, a.y - b.y };
 }
 
 void draw_point(SDL_Renderer * renderer, Point p) {
@@ -142,33 +156,40 @@ bool render(RenderState * state) {
     SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
     SDL_RenderClear(renderer);
 
+    // calculate actual point positions
+    Point point_positions[4];
+    for (int i = 0; i < 4; i++) {
+        point_positions[i] = add_points(state->points[i], state->background_origin);
+    }
+
     // draw bezier curve
     {
         SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0xFF, 0xFF);
 
-        Point prev = cubic_bezier(0, state->points);
+        Point prev = cubic_bezier(0, point_positions);
         for (int i = 1; i <= 100; i += 1) {
             double t = (double) i / 100;
 
-            Point next = cubic_bezier(t, state->points);
+            Point next = cubic_bezier(t, point_positions);
             draw_line_between_points(renderer, prev, next);
             prev = next;
         }
     }
 
+
     // draw lines between start/end points and control points
     SDL_SetRenderDrawColor(renderer, 0x00, 0xAA, 0xAA, 0xFF);
-    draw_line_between_points(renderer, state->points[0], state->points[1]);
-    draw_line_between_points(renderer, state->points[1], state->points[2]);
-    draw_line_between_points(renderer, state->points[2], state->points[3]);
+    draw_line_between_points(renderer, point_positions[0], point_positions[1]);
+    draw_line_between_points(renderer, point_positions[1], point_positions[2]);
+    draw_line_between_points(renderer, point_positions[2], point_positions[3]);
 
     // draw start/end/control points
     SDL_SetRenderDrawColor(renderer, 0xFF, 0x00, 0x00, 0xFF);
-    draw_point(renderer, state->points[0]);
-    draw_point(renderer, state->points[3]);
+    draw_point(renderer, point_positions[0]);
+    draw_point(renderer, point_positions[3]);
     SDL_SetRenderDrawColor(renderer, 0x00, 0xFF, 0x00, 0xFF);
-    draw_point(renderer, state->points[1]);
-    draw_point(renderer, state->points[2]);
+    draw_point(renderer, point_positions[1]);
+    draw_point(renderer, point_positions[2]);
 
     /* TODO all of these const values should probably be macro constants
        TODO that said, easier to leave it this way if screen height and width
@@ -321,8 +342,6 @@ int handle_window_event_helper(void * state, SDL_Event * e) {
 // updates render state based on mouse events
 void handle_mouse_event(SDL_Event e, RenderState * state) {
     if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEMOTION) {
-        int mouse_x, mouse_y;
-        SDL_GetMouseState(&mouse_x, &mouse_y);
 
         if (SDL_LockMutex(state->mutex)) {
             printf("Failed to lock mutex: %s\n", SDL_GetError());
@@ -332,12 +351,16 @@ void handle_mouse_event(SDL_Event e, RenderState * state) {
         switch (e.type) {
             case SDL_MOUSEBUTTONDOWN:
             {
+                int mouse_x = e.button.x;
+                int mouse_y = e.button.y;
+
                 /* TODO could instead handle overlapping points by finding closest
                 point to cursor and applying check_mouse_on_point to just that */
 
                 /* Bezier points */
                 for (int i = 0; i < 4; i++) {
-                    if (check_mouse_on_point(mouse_x, mouse_y, state->points[i])) {
+                    Point point_position = add_points(state->points[i], state->background_origin);
+                    if (check_mouse_on_point(mouse_x, mouse_y, point_position)) {
                         state->selected = MOUSE_SELECTED_POINT;
                         state->selected_index = i;
                         break;
@@ -360,6 +383,11 @@ void handle_mouse_event(SDL_Event e, RenderState * state) {
                     }
                 }
 
+                if (state->selected != MOUSE_SELECTED_NONE) break;
+
+                // TODO could make the slider container opaque
+                state->selected = MOUSE_SELECTED_BACKGROUND;
+
             } break;
 
             case SDL_MOUSEBUTTONUP:
@@ -369,10 +397,14 @@ void handle_mouse_event(SDL_Event e, RenderState * state) {
 
             case SDL_MOUSEMOTION:
             {
+                int mouse_x = e.motion.x;
+                int mouse_y = e.motion.y;
+
                 switch (state->selected) {
                     case MOUSE_SELECTED_POINT:
                     {
-                        state->points[state->selected_index] = (Point) { mouse_x, mouse_y };
+                        Point world_position = (Point) { mouse_x, mouse_y };
+                        state->points[state->selected_index] = subtract_points(world_position, state->background_origin);
                     } break;
 
                     case MOUSE_SELECTED_SLIDER:
@@ -392,8 +424,14 @@ void handle_mouse_event(SDL_Event e, RenderState * state) {
 
                     } break;
 
+                    case MOUSE_SELECTED_BACKGROUND:
+                    {
+                        Point offset = { e.motion.xrel, e.motion.yrel };
+                        state->background_origin = add_points(state->background_origin, offset);
+                    } break;
+
                     default:
-                        assert(state->selected == MOUSE_SELECTED_NONE);
+                        assert(state->selected == MOUSE_SELECTED_NONE); // only other option
                 }
             } break;
         }
