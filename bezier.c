@@ -23,18 +23,27 @@ typedef enum {
     MOUSE_SELECTED_NONE,
     MOUSE_SELECTED_POINT,
     MOUSE_SELECTED_SLIDER,
+    // TODO MOUSE_SELECTED_BACKGROUND?
 } MouseSelectionState;
 
 typedef struct {
+    /* bezier points */
     Point points[4];
+    /* sliders */
     float sliders_value[4];
     int sliders_x1;
     int sliders_x2;
     int sliders_y[4];
+    /* selection state */
     MouseSelectionState selected;
     int selected_index;
+    /* window info */
     int window_width;
     int window_height;
+    /* helpful pointers */
+    SDL_Renderer * renderer;
+    TTF_Font * font;
+    /* thread safety */
     SDL_mutex * mutex;
 } RenderState;
 
@@ -42,7 +51,7 @@ typedef struct {
    This would apply to RenderState_init and render
    Means we can change the return values in a consistent manner
 */
-bool RenderState_init(RenderState * state) {
+bool RenderState_init(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
     assert(!state->mutex);
 
     int win_width = INITIAL_SCREEN_WIDTH;
@@ -61,6 +70,9 @@ bool RenderState_init(RenderState * state) {
     state->window_height = win_height;
 
     state->selected = MOUSE_SELECTED_NONE;
+
+    state->renderer = renderer;
+    state->font = font;
 
     state->mutex = SDL_CreateMutex();
     if (!state->mutex) {
@@ -114,7 +126,10 @@ void draw_line_between_points(SDL_Renderer * renderer, Point p1, Point p2) {
     SDL_RenderDrawLine(renderer, p1.x, p1.y, p2.x, p2.y);
 }
 
-bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
+bool render(RenderState * state) {
+    SDL_Renderer * const renderer = state->renderer;
+    TTF_Font * const font = state->font;
+
     bool success = true;
 
     if (SDL_LockMutex(state->mutex)) {
@@ -235,6 +250,8 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
            in this loop */
         int x1 = box_rect.x + slider_box_inner_padding;
         int x2 = x1 + line_width;
+        // handle window resized too small
+        if (x2 <= x1) x2 = x1 + 1;
 
         assert(i == 0 || sliders_x1 == x1);
         assert(i == 0 || sliders_x2 == x2);
@@ -262,7 +279,7 @@ bool render(RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
     SDL_RenderPresent(renderer);
 
     if (SDL_UnlockMutex(state->mutex)) {
-        printf("Failed to lock mutex: %s\n", SDL_GetError());
+        printf("Failed to unlock mutex: %s\n", SDL_GetError());
         success = false;
         goto render_end;
     }
@@ -272,7 +289,7 @@ render_end:
     return success;
 }
 
-void handle_window_events(SDL_Event e, RenderState * state, SDL_Renderer * renderer, TTF_Font * font) {
+void handle_window_event(SDL_Event e, RenderState * state) {
     if (e.type != SDL_WINDOWEVENT) return;
 
     switch (e.window.event) {
@@ -287,35 +304,30 @@ void handle_window_events(SDL_Event e, RenderState * state, SDL_Renderer * rende
             state->window_height = e.window.data2;
 
             if (SDL_UnlockMutex(state->mutex)) {
-                printf("Failed to lock mutex: %s\n", SDL_GetError());
+                printf("Failed to unlock mutex: %s\n", SDL_GetError());
                 assert(0); // don't care about clean exit, just die
             }
-            // TODO not getting the updates during resizing, only at the end
-            printf("width: %d, height: %d\n", state->window_width, state->window_height); // DEBUG
-            render(state, renderer, font); // rerender
+
+            render(state); // rerender
         } break;
-
-        // case SDL_WINDOWEVENT_RESIZED:
-        // {
-        //     state->window_width = e.window.data1;
-        //     state->window_height = e.window.data2;
-        //     printf("width: %d, height: %d\n", state->window_width, state->window_height); // DEBUG
-        //     render(state, renderer, font); // rerender
-        // } break;
-
-        // case SDL_WINDOWEVENT_EXPOSED:
-        // {
-        //     // TODO what does this do?
-        //     render(state, renderer, font); // rerender
-        // } break;
     }
 }
 
+int handle_window_event_helper(void * state, SDL_Event * e) {
+    handle_window_event(*e, (RenderState *) state);
+    return 1;
+}
+
 // updates render state based on mouse events
-void handle_mouse_events(SDL_Event e, RenderState * state) {
+void handle_mouse_event(SDL_Event e, RenderState * state) {
     if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEMOTION) {
         int mouse_x, mouse_y;
         SDL_GetMouseState(&mouse_x, &mouse_y);
+
+        if (SDL_LockMutex(state->mutex)) {
+            printf("Failed to lock mutex: %s\n", SDL_GetError());
+            assert(0); // don't care about clean exit, just die
+        }
 
         switch (e.type) {
             case SDL_MOUSEBUTTONDOWN:
@@ -385,6 +397,11 @@ void handle_mouse_events(SDL_Event e, RenderState * state) {
                 }
             } break;
         }
+
+        if (SDL_UnlockMutex(state->mutex)) {
+            printf("Failed to unlock mutex: %s\n", SDL_GetError());
+            assert(0); // don't care about clean exit, just die
+        }
     }
 }
 
@@ -449,19 +466,22 @@ int main(int argc, char * argv[]) {
 
         // initialise render state
         RenderState state = {0};
-        if (!RenderState_init(&state)) {
+        if (!RenderState_init(&state, renderer, font)) {
             printf("Failed to intialise render state\n");
             goto main_render_cleanup;
         }
 
+        // this method is necessary for getting resize events during resizing,
+        // rather than just at the very end
+        SDL_AddEventWatch(handle_window_event_helper, &state);
+
         while (!quit) {
             while (SDL_PollEvent(&e)) {
                 if (e.type == SDL_QUIT) quit = true;
-                handle_window_events(e, &state, renderer, font);
-                handle_mouse_events(e, &state);
+                handle_mouse_event(e, &state);
             }
 
-            if (!render(&state, renderer, font)) {
+            if (!render(&state)) {
                 printf("Failed to render frame\n");
                 goto main_render_cleanup;
             }
