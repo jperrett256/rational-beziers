@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <math.h>
 #include <assert.h>
 
 #include "SDL.h"
@@ -34,8 +35,9 @@ typedef struct {
     int sliders_x1;
     int sliders_x2;
     int sliders_y[4];
-    /* background position */
-    Point background_origin;
+    /* background transform */
+    Point bg_origin;
+    float bg_log_scale;
     /* selection state */
     MouseSelectionState selected;
     int selected_index;
@@ -70,7 +72,8 @@ bool RenderState_init(RenderState * state, SDL_Renderer * renderer, TTF_Font * f
 
     // sliders_x1, sliders_x2, sliders_y to be assigned by render()
 
-    state->background_origin = (Point) { 0, 0 };
+    state->bg_origin = (Point) { 0, 0 };
+    state->bg_log_scale = 0;
 
     state->window_width = win_width;
     state->window_height = win_height;
@@ -106,12 +109,63 @@ Point cubic_bezier(double t, Point w[4]) {
     };
 }
 
+// TODO rational cubic bezier
+
 Point add_points(Point a, Point b) {
     return (Point) { a.x + b.x, a.y + b.y };
 }
 
 Point subtract_points(Point a, Point b) {
     return (Point) { a.x - b.x, a.y - b.y };
+}
+
+// scale a point by a scalar
+Point scale_point(Point p, float s) {
+    return (Point) { p.x * s, p.y * s };
+}
+
+// scale a point by the reciprocal of a scalar
+Point scale_inv_point(Point p, float s) {
+    return (Point) { p.x / s, p.y / s };
+}
+
+// TODO create constant for base and just inline this
+float get_actual_scale(float log_scale) {
+    // float base = 1.1;
+    // return pow(base, log_scale) / base;
+    return pow(1.1, log_scale);
+}
+
+Point get_display_position(Point world_position, Point bg_origin, float bg_log_scale) {
+    // TODO if else creates a really weird stepping issue (could it be related do the scalar used in get_actual_scale?)
+    if (bg_log_scale >= 0) {
+        return scale_point(add_points(world_position, bg_origin), get_actual_scale(bg_log_scale));
+    } else {
+        return scale_inv_point(add_points(world_position, bg_origin), get_actual_scale(-bg_log_scale));
+    }
+}
+
+Point get_world_position(Point display_position, Point bg_origin, float bg_log_scale) {
+    // TODO not working if both bg_origin and bg_log_scale not 0
+    if (bg_log_scale >= 0) {
+        return subtract_points(scale_inv_point(display_position, get_actual_scale(bg_log_scale)), bg_origin);
+    } else {
+        return subtract_points(scale_point(display_position, get_actual_scale(-bg_log_scale)), bg_origin);
+    }
+}
+
+Point get_new_origin(Point scale_center, Point old_origin, float log_scale_change) {
+    // // TODO this is wrong given the functions above (out of order)
+    // return add_points(old_origin, subtract_points(
+    //     scale_point(scale_center, get_actual_scale(old_scale)),
+    //     scale_point(scale_center, get_actual_scale(new_scale))
+    // ));
+    // TODO scaling still seems to behave differently in top left corner as opposed to bottom right
+    Point scaled_addition = log_scale_change >= 0 ?
+        scale_inv_point(add_points(old_origin, scale_center), get_actual_scale(log_scale_change)) :
+        scale_point(add_points(old_origin, scale_center), get_actual_scale(-log_scale_change));
+
+    return subtract_points(scaled_addition, scale_center);
 }
 
 void draw_point(SDL_Renderer * renderer, Point p) {
@@ -144,13 +198,7 @@ bool render(RenderState * state) {
     SDL_Renderer * const renderer = state->renderer;
     TTF_Font * const font = state->font;
 
-    bool success = true;
-
-    if (SDL_LockMutex(state->mutex)) {
-        printf("Failed to lock mutex: %s\n", SDL_GetError());
-        success = false;
-        goto render_end;
-    }
+    if (SDL_LockMutex(state->mutex)) assert(0);
 
     // clear screen
     SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
@@ -159,7 +207,7 @@ bool render(RenderState * state) {
     // calculate actual point positions
     Point point_positions[4];
     for (int i = 0; i < 4; i++) {
-        point_positions[i] = add_points(state->points[i], state->background_origin);
+        point_positions[i] = get_display_position(state->points[i], state->bg_origin, state->bg_log_scale);
     }
 
     // draw bezier curve
@@ -236,16 +284,14 @@ bool render(RenderState * state) {
         SDL_Surface * text_surface = TTF_RenderText_Solid(font, text_string, (SDL_Color) { 0xFF, 0xFF, 0xFF });
         if (!text_surface) {
             printf("Failed to render text surface: %s\n", TTF_GetError());
-            success = false;
-            goto render_end;
+            return false;
         }
 
         SDL_Texture * text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
         if (!text_texture) {
             SDL_FreeSurface(text_surface);
             printf("Failed to create texture from rendered text: %s\n", SDL_GetError());
-            success = false;
-            goto render_end;
+            return false;
         }
 
         // check text size remains constant (assuming monospace font)
@@ -299,15 +345,9 @@ bool render(RenderState * state) {
     // update screen
     SDL_RenderPresent(renderer);
 
-    if (SDL_UnlockMutex(state->mutex)) {
-        printf("Failed to unlock mutex: %s\n", SDL_GetError());
-        success = false;
-        goto render_end;
-    }
+    if (SDL_UnlockMutex(state->mutex)) assert(0);
 
-render_end:
-
-    return success;
+    return true;
 }
 
 void handle_window_event(SDL_Event e, RenderState * state) {
@@ -316,18 +356,12 @@ void handle_window_event(SDL_Event e, RenderState * state) {
     switch (e.window.event) {
         case SDL_WINDOWEVENT_SIZE_CHANGED:
         {
-            if (SDL_LockMutex(state->mutex)) {
-                printf("Failed to lock mutex: %s\n", SDL_GetError());
-                assert(0); // don't care about clean exit, just die
-            }
+            if (SDL_LockMutex(state->mutex)) assert(0);
 
             state->window_width = e.window.data1;
             state->window_height = e.window.data2;
 
-            if (SDL_UnlockMutex(state->mutex)) {
-                printf("Failed to unlock mutex: %s\n", SDL_GetError());
-                assert(0); // don't care about clean exit, just die
-            }
+            if (SDL_UnlockMutex(state->mutex)) assert(0);
 
             render(state); // rerender
         } break;
@@ -341,12 +375,13 @@ int handle_window_event_helper(void * state, SDL_Event * e) {
 
 // updates render state based on mouse events
 void handle_mouse_event(SDL_Event e, RenderState * state) {
-    if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEMOTION) {
+    if (e.type == SDL_MOUSEBUTTONDOWN ||
+        e.type == SDL_MOUSEBUTTONUP ||
+        e.type == SDL_MOUSEMOTION ||
+        e.type == SDL_MOUSEWHEEL
+    ) {
 
-        if (SDL_LockMutex(state->mutex)) {
-            printf("Failed to lock mutex: %s\n", SDL_GetError());
-            assert(0); // don't care about clean exit, just die
-        }
+        if (SDL_LockMutex(state->mutex)) assert(0);
 
         switch (e.type) {
             case SDL_MOUSEBUTTONDOWN:
@@ -359,7 +394,7 @@ void handle_mouse_event(SDL_Event e, RenderState * state) {
 
                 /* Bezier points */
                 for (int i = 0; i < 4; i++) {
-                    Point point_position = add_points(state->points[i], state->background_origin);
+                    Point point_position = get_display_position(state->points[i], state->bg_origin, state->bg_log_scale);
                     if (check_mouse_on_point(mouse_x, mouse_y, point_position)) {
                         state->selected = MOUSE_SELECTED_POINT;
                         state->selected_index = i;
@@ -397,14 +432,11 @@ void handle_mouse_event(SDL_Event e, RenderState * state) {
 
             case SDL_MOUSEMOTION:
             {
-                int mouse_x = e.motion.x;
-                int mouse_y = e.motion.y;
-
                 switch (state->selected) {
                     case MOUSE_SELECTED_POINT:
                     {
-                        Point world_position = (Point) { mouse_x, mouse_y };
-                        state->points[state->selected_index] = subtract_points(world_position, state->background_origin);
+                        Point mouse_pos = { e.motion.x, e.motion.y };
+                        state->points[state->selected_index] = get_world_position(mouse_pos, state->bg_origin, state->bg_log_scale);
                     } break;
 
                     case MOUSE_SELECTED_SLIDER:
@@ -416,35 +448,50 @@ void handle_mouse_event(SDL_Event e, RenderState * state) {
                         int x1 = state->sliders_x1;
                         int x2 = state->sliders_x2;
 
-                        int slider_x = mouse_x;
+                        int slider_x = e.motion.x;
                         if (slider_x < x1) slider_x = x1;
                         if (slider_x > x2) slider_x = x2;
 
-                        state->sliders_value[state->selected_index] = slider_x_to_value(slider_x, x1, x2); // TODO
-
+                        state->sliders_value[state->selected_index] = slider_x_to_value(slider_x, x1, x2);
                     } break;
 
                     case MOUSE_SELECTED_BACKGROUND:
                     {
+                        /* TODO this needs to be adjusted for scaling
+                           (although maybe actually slower scrolling when zoomed out is a feature?) */
                         Point offset = { e.motion.xrel, e.motion.yrel };
-                        state->background_origin = add_points(state->background_origin, offset);
+                        state->bg_origin = add_points(state->bg_origin, offset);
                     } break;
 
                     default:
                         assert(state->selected == MOUSE_SELECTED_NONE); // only other option
                 }
             } break;
+
+            case SDL_MOUSEWHEEL:
+            {
+                int mouse_x, mouse_y;
+                SDL_GetMouseState(&mouse_x, &mouse_y);
+                Point mouse_pos = { mouse_x, mouse_y };
+
+                float scale_change = e.wheel.y;
+
+                // change origin so mouse_pos doesn't change after scaling
+                /* TODO this approach means points don't move away from cursor at same rate
+                   (still scaling from origin, not mouse_pos) */
+                state->bg_origin = get_new_origin(mouse_pos, state->bg_origin, scale_change);
+                state->bg_log_scale += scale_change;
+
+            } break;
+
+            default:
+                assert(0);
         }
 
-        if (SDL_UnlockMutex(state->mutex)) {
-            printf("Failed to unlock mutex: %s\n", SDL_GetError());
-            assert(0); // don't care about clean exit, just die
-        }
+        if (SDL_UnlockMutex(state->mutex)) assert(0);
     }
 }
 
-// TODO use snake case instead of camel case for functions everywhere?
-// TODO also, tabs to spaces please
 int main(int argc, char * argv[]) {
     SDL_Window * window = NULL;
     SDL_Renderer * renderer = NULL;
