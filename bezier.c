@@ -109,7 +109,50 @@ Point cubic_bezier(double t, Point w[4]) {
     };
 }
 
-// TODO rational cubic bezier
+// the correct rational cubic implementation
+Point rational_cubic_bezier(double t, Point w[4], float r[4]) {
+    double t2 = t * t;
+    double t3 = t2 * t;
+    double mt = 1 - t;
+    double mt2 = mt * mt;
+    double mt3 = mt2 * mt;
+
+    double f[4] = {
+        r[0] * mt3,
+        3 * r[1] * mt2 * t,
+        3 * r[2] * mt * t2,
+        r[3] * t3
+    };
+    double basis = f[0] + f[1] + f[2] + f[3];
+
+    return (Point) {
+        (f[0] * w[0].x + f[1] * w[1].x + f[2] * w[2].x + f[3] * w[3].x)/basis,
+        (f[0] * w[0].y + f[1] * w[1].y + f[2] * w[2].y + f[3] * w[3].y)/basis,
+    };
+}
+
+/* the whole point of this piece of code: to understand why attempting to normalise
+   the sum in a simpler fashion would not work */
+Point fake_rational_cubic_bezier(double t, Point w[4], float r[4]) {
+    double t2 = t * t;
+    double t3 = t2 * t;
+    double mt = 1 - t;
+    double mt2 = mt * mt;
+    double mt3 = mt2 * mt;
+
+    double f[4] = {
+        r[0] * mt3,
+        3 * r[1] * mt2 * t,
+        3 * r[2] * mt * t2,
+        r[3] * t3
+    };
+    double basis = r[0] + r[1] + r[2] + r[3];
+
+    return (Point) {
+        (f[0] * w[0].x + f[1] * w[1].x + f[2] * w[2].x + f[3] * w[3].x)/basis,
+        (f[0] * w[0].y + f[1] * w[1].y + f[2] * w[2].y + f[3] * w[3].y)/basis,
+    };
+}
 
 Point add_points(Point a, Point b) {
     return (Point) { a.x + b.x, a.y + b.y };
@@ -155,11 +198,6 @@ Point get_world_position(Point display_position, Point bg_origin, float bg_log_s
 }
 
 Point get_new_origin(Point scale_center, Point old_origin, float log_scale_change) {
-    // // TODO this is wrong given the functions above (out of order)
-    // return add_points(old_origin, subtract_points(
-    //     scale_point(scale_center, get_actual_scale(old_scale)),
-    //     scale_point(scale_center, get_actual_scale(new_scale))
-    // ));
     // TODO scaling still seems to behave differently in top left corner as opposed to bottom right
     Point scaled_addition = log_scale_change >= 0 ?
         scale_inv_point(add_points(old_origin, scale_center), get_actual_scale(log_scale_change)) :
@@ -214,11 +252,13 @@ bool render(RenderState * state) {
     {
         SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0xFF, 0xFF);
 
-        Point prev = cubic_bezier(0, point_positions);
+        // Point prev = fake_rational_cubic_bezier(0, point_positions, state->sliders_value);
+        Point prev = rational_cubic_bezier(0, point_positions, state->sliders_value);
         for (int i = 1; i <= 100; i += 1) {
             double t = (double) i / 100;
 
-            Point next = cubic_bezier(t, point_positions);
+            // Point next = fake_rational_cubic_bezier(t, point_positions, state->sliders_value);
+            Point next = rational_cubic_bezier(t, point_positions, state->sliders_value);
             draw_line_between_points(renderer, prev, next);
             prev = next;
         }
