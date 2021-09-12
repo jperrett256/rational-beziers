@@ -16,9 +16,9 @@ const float SLIDER_MAX = 2.00f;
 const float SLIDER_MIN = 0.01f;
 
 typedef struct {
-    int x;
-    int y;
-} Point;
+    float x;
+    float y;
+} Vec2;
 
 typedef enum {
     MOUSE_SELECTED_NONE,
@@ -29,15 +29,15 @@ typedef enum {
 
 typedef struct {
     /* bezier points */
-    Point points[4];
+    Vec2 points[4];
     /* sliders */
     float sliders_value[4];
     int sliders_x1;
     int sliders_x2;
     int sliders_y[4];
-    /* background transform */
-    Point bg_origin;
-    float bg_log_scale;
+    /* viewport translation and scaling */
+    Vec2 view_center;
+    float view_log_scale;
     /* selection state */
     MouseSelectionState selected;
     int selected_index;
@@ -61,10 +61,10 @@ bool RenderState_init(RenderState * state, SDL_Renderer * renderer, TTF_Font * f
     int win_width = INITIAL_SCREEN_WIDTH;
     int win_height = INITIAL_SCREEN_HEIGHT;
 
-    state->points[0] = (Point) { win_width / 4, win_height / 4 };
-    state->points[1] = (Point) { win_width / 4, win_height * 3 / 4 };
-    state->points[2] = (Point) { win_width * 3 / 4, win_height * 3 / 4 };
-    state->points[3] = (Point) { win_width * 3 / 4, win_height / 4 };
+    state->points[0] = (Vec2) { -win_width / 4, -win_height / 4 };
+    state->points[1] = (Vec2) { -win_width / 4, win_height / 4 };
+    state->points[2] = (Vec2) { win_width / 4, win_height / 4 };
+    state->points[3] = (Vec2) { win_width / 4, -win_height / 4 };
 
     for (int i = 0; i < 4; i++) {
         state->sliders_value[i] = 1.00f;
@@ -72,8 +72,8 @@ bool RenderState_init(RenderState * state, SDL_Renderer * renderer, TTF_Font * f
 
     // sliders_x1, sliders_x2, sliders_y to be assigned by render()
 
-    state->bg_origin = (Point) { 0, 0 };
-    state->bg_log_scale = 0;
+    state->view_center = (Vec2) { 0, 0 };
+    state->view_log_scale = 0;
 
     state->window_width = win_width;
     state->window_height = win_height;
@@ -96,21 +96,21 @@ void RenderState_cleanup(RenderState * state) {
     SDL_DestroyMutex(state->mutex);
 }
 
-Point cubic_bezier(double t, Point w[4]) {
+Vec2 cubic_bezier(double t, Vec2 w[4]) {
     double t2 = t * t;
     double t3 = t2 * t;
     double mt = 1 - t;
     double mt2 = mt * mt;
     double mt3 = mt2 * mt;
 
-    return (Point) {
+    return (Vec2) {
         mt3 * w[0].x + 3 * mt2 * t * w[1].x + 3 * mt * t2 * w[2].x + t3 * w[3].x,
         mt3 * w[0].y + 3 * mt2 * t * w[1].y + 3 * mt * t2 * w[2].y + t3 * w[3].y
     };
 }
 
 // the correct rational cubic implementation
-Point rational_cubic_bezier(double t, Point w[4], float r[4]) {
+Vec2 rational_cubic_bezier(double t, Vec2 w[4], float r[4]) {
     double t2 = t * t;
     double t3 = t2 * t;
     double mt = 1 - t;
@@ -125,7 +125,7 @@ Point rational_cubic_bezier(double t, Point w[4], float r[4]) {
     };
     double basis = f[0] + f[1] + f[2] + f[3];
 
-    return (Point) {
+    return (Vec2) {
         (f[0] * w[0].x + f[1] * w[1].x + f[2] * w[2].x + f[3] * w[3].x)/basis,
         (f[0] * w[0].y + f[1] * w[1].y + f[2] * w[2].y + f[3] * w[3].y)/basis,
     };
@@ -133,7 +133,7 @@ Point rational_cubic_bezier(double t, Point w[4], float r[4]) {
 
 /* the whole point of this piece of code: to understand why attempting to normalise
    the sum in a simpler fashion would not work */
-Point fake_rational_cubic_bezier(double t, Point w[4], float r[4]) {
+Vec2 fake_rational_cubic_bezier(double t, Vec2 w[4], float r[4]) {
     double t2 = t * t;
     double t3 = t2 * t;
     double mt = 1 - t;
@@ -148,70 +148,65 @@ Point fake_rational_cubic_bezier(double t, Point w[4], float r[4]) {
     };
     double basis = r[0] + r[1] + r[2] + r[3];
 
-    return (Point) {
+    return (Vec2) {
         (f[0] * w[0].x + f[1] * w[1].x + f[2] * w[2].x + f[3] * w[3].x)/basis,
         (f[0] * w[0].y + f[1] * w[1].y + f[2] * w[2].y + f[3] * w[3].y)/basis,
     };
 }
 
-Point add_points(Point a, Point b) {
-    return (Point) { a.x + b.x, a.y + b.y };
+Vec2 Vec2_add(Vec2 a, Vec2 b) {
+    return (Vec2) { a.x + b.x, a.y + b.y };
 }
 
-Point subtract_points(Point a, Point b) {
-    return (Point) { a.x - b.x, a.y - b.y };
+Vec2 Vec2_sub(Vec2 a, Vec2 b) {
+    return (Vec2) { a.x - b.x, a.y - b.y };
 }
 
 // scale a point by a scalar
-Point scale_point(Point p, float s) {
-    return (Point) { p.x * s, p.y * s };
+Vec2 Vec2_scale(Vec2 p, float s) {
+    return (Vec2) { p.x * s, p.y * s };
 }
 
 // scale a point by the reciprocal of a scalar
-Point scale_inv_point(Point p, float s) {
-    return (Point) { p.x / s, p.y / s };
+Vec2 Vec2_iscale(Vec2 p, float s) {
+    return (Vec2) { p.x / s, p.y / s };
 }
 
 // TODO create constant for base and just inline this
 float get_actual_scale(float log_scale) {
-    // float base = 1.1;
-    // return pow(base, log_scale) / base;
     return pow(1.1, log_scale);
 }
 
-Point get_display_position(Point world_position, Point bg_origin, float bg_log_scale) {
-    // TODO if else creates a really weird stepping issue (could it be related do the scalar used in get_actual_scale?)
-    if (bg_log_scale >= 0) {
-        return scale_point(add_points(world_position, bg_origin), get_actual_scale(bg_log_scale));
+Vec2 world_to_view_pos(Vec2 world_pos, Vec2 view_center, float view_log_scale, int disp_w, int disp_h) {
+    Vec2 result = Vec2_sub(world_pos, view_center);
+
+    if (view_log_scale >= 0) {
+        result = Vec2_iscale(result, get_actual_scale(view_log_scale));
     } else {
-        return scale_inv_point(add_points(world_position, bg_origin), get_actual_scale(-bg_log_scale));
+        result = Vec2_scale(result, get_actual_scale(-view_log_scale));
     }
+
+    return Vec2_add(result, (Vec2) { disp_w / 2, disp_h / 2 });
 }
 
-Point get_world_position(Point display_position, Point bg_origin, float bg_log_scale) {
-    // TODO not working if both bg_origin and bg_log_scale not 0
-    if (bg_log_scale >= 0) {
-        return subtract_points(scale_inv_point(display_position, get_actual_scale(bg_log_scale)), bg_origin);
+Vec2 view_to_world_pos(Vec2 view_pos, Vec2 view_center, float view_log_scale, int disp_w, int disp_h) {
+    Vec2 result = Vec2_sub(view_pos, (Vec2) { disp_w / 2, disp_h / 2 });
+
+    if (view_log_scale >= 0) {
+        result = Vec2_scale(result, get_actual_scale(view_log_scale));
     } else {
-        return subtract_points(scale_point(display_position, get_actual_scale(-bg_log_scale)), bg_origin);
+        result = Vec2_iscale(result, get_actual_scale(-view_log_scale));
     }
+
+    return Vec2_add(result, view_center);
 }
 
-Point get_new_origin(Point scale_center, Point old_origin, float log_scale_change) {
-    // TODO scaling still seems to behave differently in top left corner as opposed to bottom right
-    Point scaled_addition = log_scale_change >= 0 ?
-        scale_inv_point(add_points(old_origin, scale_center), get_actual_scale(log_scale_change)) :
-        scale_point(add_points(old_origin, scale_center), get_actual_scale(-log_scale_change));
-
-    return subtract_points(scaled_addition, scale_center);
-}
-
-void draw_point(SDL_Renderer * renderer, Point p) {
+void draw_point(SDL_Renderer * renderer, Vec2 p) {
     SDL_Rect point_rect = { p.x - POINT_SIZE / 2, p.y - POINT_SIZE / 2, POINT_SIZE, POINT_SIZE };
     SDL_RenderFillRect(renderer, &point_rect);
 }
 
-bool check_mouse_on_point(int x, int y, Point p) {
+bool check_mouse_on_point(int x, int y, Vec2 p) {
     return x < p.x + POINT_SIZE / 2 && x >= p.x - POINT_SIZE / 2 && y < p.y + POINT_SIZE / 2 && y >= p.y - POINT_SIZE / 2;
 }
 
@@ -228,7 +223,7 @@ float slider_x_to_value(int x, int x1, int x2) {
     return SLIDER_MIN + (x - x1) * (SLIDER_MAX - SLIDER_MIN) / (x2 - x1);
 }
 
-void draw_line_between_points(SDL_Renderer * renderer, Point p1, Point p2) {
+void draw_line_between_points(SDL_Renderer * renderer, Vec2 p1, Vec2 p2) {
     SDL_RenderDrawLine(renderer, p1.x, p1.y, p2.x, p2.y);
 }
 
@@ -243,22 +238,28 @@ bool render(RenderState * state) {
     SDL_RenderClear(renderer);
 
     // calculate actual point positions
-    Point point_positions[4];
+    Vec2 point_positions[4];
     for (int i = 0; i < 4; i++) {
-        point_positions[i] = get_display_position(state->points[i], state->bg_origin, state->bg_log_scale);
+        point_positions[i] = world_to_view_pos(
+            state->points[i],
+            state->view_center,
+            state->view_log_scale,
+            state->window_width,
+            state->window_height
+        );
     }
 
     // draw bezier curve
     {
         SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0xFF, 0xFF);
 
-        // Point prev = fake_rational_cubic_bezier(0, point_positions, state->sliders_value);
-        Point prev = rational_cubic_bezier(0, point_positions, state->sliders_value);
+        // Vec2 prev = fake_rational_cubic_bezier(0, point_positions, state->sliders_value);
+        Vec2 prev = rational_cubic_bezier(0, point_positions, state->sliders_value);
         for (int i = 1; i <= 100; i += 1) {
             double t = (double) i / 100;
 
-            // Point next = fake_rational_cubic_bezier(t, point_positions, state->sliders_value);
-            Point next = rational_cubic_bezier(t, point_positions, state->sliders_value);
+            // Vec2 next = fake_rational_cubic_bezier(t, point_positions, state->sliders_value);
+            Vec2 next = rational_cubic_bezier(t, point_positions, state->sliders_value);
             draw_line_between_points(renderer, prev, next);
             prev = next;
         }
@@ -278,11 +279,6 @@ bool render(RenderState * state) {
     SDL_SetRenderDrawColor(renderer, 0x00, 0xFF, 0x00, 0xFF);
     draw_point(renderer, point_positions[1]);
     draw_point(renderer, point_positions[2]);
-
-    /* TODO all of these const values should probably be macro constants
-       TODO that said, easier to leave it this way if screen height and width
-       are ever to be dynamic
-    */
 
     // draw container for sliders
     // TODO could probably be more consistent with use of const
@@ -372,7 +368,7 @@ bool render(RenderState * state) {
 
         int point_x = slider_value_to_x(state->sliders_value[i], x1, x2);
         SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
-        draw_point(renderer, (Point) { point_x, current_y });
+        draw_point(renderer, (Vec2) { point_x, current_y });
 
         /* update render state*/
         state->sliders_y[i] = current_y;
@@ -434,7 +430,13 @@ void handle_mouse_event(SDL_Event e, RenderState * state) {
 
                 /* Bezier points */
                 for (int i = 0; i < 4; i++) {
-                    Point point_position = get_display_position(state->points[i], state->bg_origin, state->bg_log_scale);
+                    Vec2 point_position = world_to_view_pos(
+                        state->points[i],
+                        state->view_center,
+                        state->view_log_scale,
+                        state->window_width,
+                        state->window_height
+                    );
                     if (check_mouse_on_point(mouse_x, mouse_y, point_position)) {
                         state->selected = MOUSE_SELECTED_POINT;
                         state->selected_index = i;
@@ -451,7 +453,7 @@ void handle_mouse_event(SDL_Event e, RenderState * state) {
                 for (int i = 0; i < 4; i++) {
                     int slider_x = slider_value_to_x(state->sliders_value[i], x1, x2);
                     int slider_y = state->sliders_y[i];
-                    if (check_mouse_on_point(mouse_x, mouse_y, (Point) { slider_x, slider_y })) {
+                    if (check_mouse_on_point(mouse_x, mouse_y, (Vec2) { slider_x, slider_y })) {
                         state->selected = MOUSE_SELECTED_SLIDER;
                         state->selected_index = i;
                         break;
@@ -475,16 +477,19 @@ void handle_mouse_event(SDL_Event e, RenderState * state) {
                 switch (state->selected) {
                     case MOUSE_SELECTED_POINT:
                     {
-                        Point mouse_pos = { e.motion.x, e.motion.y };
-                        state->points[state->selected_index] = get_world_position(mouse_pos, state->bg_origin, state->bg_log_scale);
+                        Vec2 mouse_pos = { e.motion.x, e.motion.y };
+                        state->points[state->selected_index] = view_to_world_pos(
+                            mouse_pos,
+                            state->view_center,
+                            state->view_log_scale,
+                            state->window_width,
+                            state->window_height
+                        );
                     } break;
 
                     case MOUSE_SELECTED_SLIDER:
                     {
 
-                        /* TODO how are we going to get x1 and x2 from our render
-                           function here? Calculate what we need external to both
-                           functions? Pass through render state? */
                         int x1 = state->sliders_x1;
                         int x2 = state->sliders_x2;
 
@@ -497,10 +502,16 @@ void handle_mouse_event(SDL_Event e, RenderState * state) {
 
                     case MOUSE_SELECTED_BACKGROUND:
                     {
-                        /* TODO this needs to be adjusted for scaling
-                           (although maybe actually slower scrolling when zoomed out is a feature?) */
-                        Point offset = { e.motion.xrel, e.motion.yrel };
-                        state->bg_origin = add_points(state->bg_origin, offset);
+                        Vec2 offset = { e.motion.xrel, e.motion.yrel };
+
+                        /* Adjust for scaling */
+                        if (state->view_log_scale >= 0) {
+                            offset = Vec2_scale(offset, get_actual_scale(state->view_log_scale));
+                        } else {
+                            offset = Vec2_iscale(offset, get_actual_scale(-state->view_log_scale));
+                        }
+
+                        state->view_center = Vec2_sub(state->view_center, offset);
                     } break;
 
                     default:
@@ -512,15 +523,27 @@ void handle_mouse_event(SDL_Event e, RenderState * state) {
             {
                 int mouse_x, mouse_y;
                 SDL_GetMouseState(&mouse_x, &mouse_y);
-                Point mouse_pos = { mouse_x, mouse_y };
+                Vec2 mouse_pos = { mouse_x, mouse_y };
 
-                float scale_change = e.wheel.y;
+                Vec2 mouse_world_pos = view_to_world_pos(
+                    mouse_pos,
+                    state->view_center,
+                    state->view_log_scale,
+                    state->window_width,
+                    state->window_height
+                );
 
-                // change origin so mouse_pos doesn't change after scaling
-                /* TODO this approach means points don't move away from cursor at same rate
-                   (still scaling from origin, not mouse_pos) */
-                state->bg_origin = get_new_origin(mouse_pos, state->bg_origin, scale_change);
-                state->bg_log_scale += scale_change;
+                float scale_change = -e.wheel.y;
+
+                /* Update viewport center coordinates so that coordinate under the
+                   mouse position remains under the mouse position after scaling */
+
+                state->view_center = Vec2_add(
+                    Vec2_scale(state->view_center, get_actual_scale(scale_change)),
+                    Vec2_scale(mouse_world_pos, 1 - get_actual_scale(scale_change))
+                );
+
+                state->view_log_scale += scale_change;
 
             } break;
 
@@ -610,6 +633,7 @@ int main(int argc, char * argv[]) {
                 printf("Failed to render frame\n");
                 goto main_render_cleanup;
             }
+            SDL_Delay(5);
         }
 
 main_render_cleanup:
