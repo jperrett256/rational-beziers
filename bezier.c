@@ -27,6 +27,7 @@ typedef enum {
     MOUSE_SELECTED_BACKGROUND,
 } MouseSelectionState;
 
+// TODO max/min viewport scaling? Checks that we aren't dividing by 0 at any point?
 typedef struct {
     /* bezier points */
     Vec2 points[4];
@@ -180,11 +181,7 @@ float get_actual_scale(float log_scale) {
 Vec2 world_to_view_pos(Vec2 world_pos, Vec2 view_center, float view_log_scale, int disp_w, int disp_h) {
     Vec2 result = Vec2_sub(world_pos, view_center);
 
-    if (view_log_scale >= 0) {
-        result = Vec2_iscale(result, get_actual_scale(view_log_scale));
-    } else {
-        result = Vec2_scale(result, get_actual_scale(-view_log_scale));
-    }
+    result = Vec2_iscale(result, get_actual_scale(view_log_scale));
 
     return Vec2_add(result, (Vec2) { disp_w / 2, disp_h / 2 });
 }
@@ -192,11 +189,7 @@ Vec2 world_to_view_pos(Vec2 world_pos, Vec2 view_center, float view_log_scale, i
 Vec2 view_to_world_pos(Vec2 view_pos, Vec2 view_center, float view_log_scale, int disp_w, int disp_h) {
     Vec2 result = Vec2_sub(view_pos, (Vec2) { disp_w / 2, disp_h / 2 });
 
-    if (view_log_scale >= 0) {
-        result = Vec2_scale(result, get_actual_scale(view_log_scale));
-    } else {
-        result = Vec2_iscale(result, get_actual_scale(-view_log_scale));
-    }
+    result = Vec2_scale(result, get_actual_scale(view_log_scale));
 
     return Vec2_add(result, view_center);
 }
@@ -505,13 +498,9 @@ void handle_mouse_event(SDL_Event e, RenderState * state) {
                         Vec2 offset = { e.motion.xrel, e.motion.yrel };
 
                         /* Adjust for scaling */
-                        if (state->view_log_scale >= 0) {
-                            offset = Vec2_scale(offset, get_actual_scale(state->view_log_scale));
-                        } else {
-                            offset = Vec2_iscale(offset, get_actual_scale(-state->view_log_scale));
-                        }
+                        Vec2 scaled_offset = Vec2_scale(offset, get_actual_scale(state->view_log_scale));
 
-                        state->view_center = Vec2_sub(state->view_center, offset);
+                        state->view_center = Vec2_sub(state->view_center, scaled_offset);
                     } break;
 
                     default:
